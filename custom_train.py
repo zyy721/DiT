@@ -27,10 +27,14 @@ import argparse
 import logging
 import os
 
-from models import DiT_models
+# from models import DiT_models
+from custom_models import DiT_models
+
 from diffusion import create_diffusion
 from diffusers.models import AutoencoderKL
 
+from mmengine import Config
+from mmengine.registry import MODELS
 
 #################################################################################
 #                             Training Helper Functions                         #
@@ -136,51 +140,99 @@ def main(args):
     else:
         logger = create_logger(None)
 
+    nframes_past = 5
+    nframes = 11
+
     # Create model:
-    assert args.image_size % 8 == 0, "Image size must be divisible by 8 (for the VAE encoder)."
-    latent_size = args.image_size // 8
+    # assert args.image_size % 8 == 0, "Image size must be divisible by 8 (for the VAE encoder)."
+    # latent_size = args.image_size // 8
+    # model = DiT_models[args.model](
+    #     input_size=latent_size,
+    #     num_classes=args.num_classes
+    # )
+
     model = DiT_models[args.model](
-        input_size=latent_size,
-        num_classes=args.num_classes
+        input_size=50,
+        num_classes=args.num_classes,
+        nframes=nframes,
     )
+
     # Note that parameter initialization is done within the DiT constructor
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
     requires_grad(ema, False)
     model = DDP(model.to(device), device_ids=[rank])
     diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule
-    vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
+    # vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
+
+
+    # load config
+    cfg = Config.fromfile('utils/OccWorld/config/custom_train_occworld.py')
+    import utils.OccWorld.model
+    from utils.OccWorld.dataset import get_dataloader, get_nuScenes_label_name
+
+    occ_vae = MODELS.build(cfg.model)
+    occ_vae = occ_vae.to(device)
+    occ_vae.init_weights()
+    ckpt_occ_vae = torch.load(cfg.load_from, map_location='cpu')
+    if 'state_dict' in ckpt_occ_vae:
+        state_dict = ckpt_occ_vae['state_dict']
+    else:
+        state_dict = ckpt_occ_vae
+    occ_vae.load_state_dict(state_dict, strict=True)
+
+    occ_vae.eval()
+    occ_vae.requires_grad_(False)
+
+
     logger.info(f"DiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     # Setup optimizer (we used default Adam betas=(0.9, 0.999) and a constant learning rate of 1e-4 in our paper):
-    opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
+    # opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.01)
 
     # Setup data:
-    transform = transforms.Compose([
-        transforms.Lambda(lambda pil_image: center_crop_arr(pil_image, args.image_size)),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
-    ])
-    dataset = ImageFolder(args.data_path, transform=transform)
-    sampler = DistributedSampler(
-        dataset,
-        num_replicas=dist.get_world_size(),
-        rank=rank,
-        shuffle=True,
-        seed=args.global_seed
-    )
-    loader = DataLoader(
-        dataset,
-        # batch_size=int(args.global_batch_size // dist.get_world_size()),
-        batch_size=2,
+    # transform = transforms.Compose([
+    #     transforms.Lambda(lambda pil_image: center_crop_arr(pil_image, args.image_size)),
+    #     transforms.RandomHorizontalFlip(),
+    #     transforms.ToTensor(),
+    #     transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
+    # ])
+    # dataset = ImageFolder(args.data_path, transform=transform)
+    # sampler = DistributedSampler(
+    #     dataset,
+    #     num_replicas=dist.get_world_size(),
+    #     rank=rank,
+    #     shuffle=True,
+    #     seed=args.global_seed
+    # )
 
-        shuffle=False,
-        sampler=sampler,
-        num_workers=args.num_workers,
-        pin_memory=True,
-        drop_last=True
+
+    train_dataset_loader, val_dataset_loader = get_dataloader(
+        cfg.train_dataset_config,
+        cfg.val_dataset_config,
+        cfg.train_wrapper_config,
+        cfg.val_wrapper_config,
+        cfg.train_loader,
+        cfg.val_loader,
+        dist=True,
     )
-    logger.info(f"Dataset contains {len(dataset):,} images ({args.data_path})")
+    logger.info(f"Dataset contains {len(train_dataset_loader.dataset)}")
+
+
+    # loader = DataLoader(
+    #     # dataset,
+    #     train_dataloader,
+
+    #     # batch_size=int(args.global_batch_size // dist.get_world_size()),
+    #     batch_size=2,
+
+    #     shuffle=False,
+    #     sampler=sampler,
+    #     num_workers=args.num_workers,
+    #     pin_memory=True,
+    #     drop_last=True
+    # )
+    # logger.info(f"Dataset contains {len(dataset):,} images ({args.data_path})")
 
     # Prepare models for training:
     update_ema(ema, model.module, decay=0)  # Ensure EMA is initialized with synced weights
@@ -193,19 +245,44 @@ def main(args):
     running_loss = 0
     start_time = time()
 
+    batch_size = train_dataset_loader.batch_size
+    cond_mask = torch.zeros([batch_size, nframes, 1, 1, 1]).to(device)
+    cond_mask[:, :nframes_past] = 1
+    # cond_mask = cond_mask.view(-1, 1, 1, 1)
+    
     logger.info(f"Training for {args.epochs} epochs...")
     for epoch in range(args.epochs):
-        sampler.set_epoch(epoch)
+        # sampler.set_epoch(epoch)
+
+        if hasattr(train_dataset_loader.sampler, 'set_epoch'):
+            train_dataset_loader.sampler.set_epoch(epoch)
+
         logger.info(f"Beginning epoch {epoch}...")
-        for x, y in loader:
-            x = x.to(device)
-            y = y.to(device)
+        # for x, y in loader:
+        #     x = x.to(device)
+        #     y = y.to(device)
+        #     with torch.no_grad():
+        #         # Map input images to latent space + normalize latents:
+        #         x = vae.encode(x).latent_dist.sample().mul_(0.18215)
+        #     t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
+        #     model_kwargs = dict(y=y)
+        #     loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
+
+
+        for batch in train_dataset_loader:
+            input_occs, target_occs, metas = batch
+            input_occs = input_occs.to(device)
             with torch.no_grad():
                 # Map input images to latent space + normalize latents:
-                x = vae.encode(x).latent_dist.sample().mul_(0.18215)
-            t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
-            model_kwargs = dict(y=y)
-            loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
+                occ_z, occ_shapes = occ_vae.forward_encoder(input_occs)
+                latents, occ_z_mu, occ_z_sigma, occ_logvar = occ_vae.sample_z(occ_z)
+            latents = latents.view(batch_size, nframes, *latents.shape[1:])
+            # t = torch.randint(0, diffusion.num_timesteps, (latents.shape[0],), device=device)
+            t = torch.randint(0, diffusion.num_timesteps, (batch_size,), device=device)
+            model_kwargs = dict(y=0, nframes=nframes) # Place Holder
+            # loss_dict = diffusion.training_losses(model, latents, t, cond_mask, model_kwargs)
+            loss_dict = diffusion.custom_training_losses(model, latents, t, cond_mask, model_kwargs)
+
             loss = loss_dict["loss"].mean()
             opt.zero_grad()
             loss.backward()
