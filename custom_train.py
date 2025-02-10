@@ -245,10 +245,9 @@ def main(args):
     running_loss = 0
     start_time = time()
 
-    batch_size = train_dataset_loader.batch_size
-    cond_mask = torch.zeros([batch_size, nframes, 1, 1, 1]).to(device)
-    cond_mask[:, :nframes_past] = 1
-    # cond_mask = cond_mask.view(-1, 1, 1, 1)
+    # batch_size = train_dataset_loader.batch_size
+    # cond_mask = torch.zeros([batch_size, nframes, 1, 1, 1]).to(device)
+    # cond_mask[:, :nframes_past] = 1
     
     logger.info(f"Training for {args.epochs} epochs...")
     for epoch in range(args.epochs):
@@ -272,6 +271,11 @@ def main(args):
         for batch in train_dataset_loader:
             input_occs, target_occs, metas = batch
             input_occs = input_occs.to(device)
+
+            batch_size = input_occs.shape[0]
+            cond_mask = torch.zeros([batch_size, nframes, 1, 1, 1]).to(device)
+            cond_mask[:, :nframes_past] = 1
+
             with torch.no_grad():
                 # Map input images to latent space + normalize latents:
                 occ_z, occ_shapes = occ_vae.forward_encoder(input_occs)

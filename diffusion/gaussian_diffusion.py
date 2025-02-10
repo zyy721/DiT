@@ -498,6 +498,14 @@ class GaussianDiffusion:
         for i in indices:
             t = th.tensor([i] * shape[0], device=device)
             with th.no_grad():
+
+
+                if "cond_frame" in model_kwargs:
+                    cond_frame = model_kwargs["cond_frame"]       
+                    cond_mask = model_kwargs["cond_mask"]
+                    img = img * (1 - cond_mask) + cond_frame * cond_mask
+
+
                 out = self.p_sample(
                     model,
                     img,
@@ -509,6 +517,13 @@ class GaussianDiffusion:
                 )
                 yield out
                 img = out["sample"]
+
+
+        if "cond_frame" in model_kwargs:
+            cond_frame = model_kwargs["cond_frame"]       
+            cond_mask = model_kwargs["cond_mask"]
+            img = img * (1 - cond_mask) + cond_frame * cond_mask
+
 
     def ddim_sample(
         self,

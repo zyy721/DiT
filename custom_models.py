@@ -177,7 +177,7 @@ class DiT(nn.Module):
 
         self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)
-        self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
+        # self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
         num_patches = self.x_embedder.num_patches
         # Will use fixed sin-cos embedding:
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
@@ -215,7 +215,7 @@ class DiT(nn.Module):
         nn.init.constant_(self.x_embedder.proj.bias, 0)
 
         # Initialize label embedding table:
-        nn.init.normal_(self.y_embedder.embedding_table.weight, std=0.02)
+        # nn.init.normal_(self.y_embedder.embedding_table.weight, std=0.02)
 
         # Initialize timestep embedding MLP:
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
@@ -314,6 +314,28 @@ class DiT(nn.Module):
         eps = torch.cat([half_eps, half_eps], dim=0)
         return torch.cat([eps, rest], dim=1)
 
+    def custom_forward_with_cfg(self, x, t, nframes, cond_frame, cond_mask):
+        """
+        Forward pass of DiT, but also batches the unconditional forward pass for classifier-free guidance.
+        """
+        # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
+        B = x.shape[0] // nframes
+        x = x.view(B, nframes, *x.shape[1:])
+        t = t.view(B, nframes, *t.shape[1:])
+        t = t[:, 0]
+        y = 0
+        model_out = self.forward(x, t, y, nframes)
+        # # For exact reproducibility reasons, we apply classifier-free guidance on only
+        # # three channels by default. The standard approach to cfg applies it to all channels.
+        # # This can be done by uncommenting the following line and commenting-out the line following that.
+        # # eps, rest = model_out[:, :self.in_channels], model_out[:, self.in_channels:]
+        # eps, rest = model_out[:, :3], model_out[:, 3:]
+        # cond_eps, uncond_eps = torch.split(eps, len(eps) // 2, dim=0)
+        # half_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
+        # eps = torch.cat([half_eps, half_eps], dim=0)
+        # return torch.cat([eps, rest], dim=1)
+
+        return model_out
 
 #################################################################################
 #                   Sine/Cosine Positional Embedding Functions                  #

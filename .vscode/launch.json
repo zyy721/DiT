@@ -72,7 +72,31 @@
                 "custom_train.py",
                 "--model", "DiT-XL/2", 
                 "--data-path", "/harddisk/yzhu/imagenet-1k/val",
+                "--ckpt-every", "5000",
 
+            ]
+        },
+
+        {
+            "name": "dit_infer_occ",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "custom_sample.py",
+
+            "python": "/home/yzhu/anaconda3/envs/dojo/bin/python",
+            "console": "integratedTerminal",
+            // "module": "torch.distributed.run",
+            "justMyCode": false,
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0", // "0,1,2,3",
+                "PYTHONPATH": "${workspaceFolder}:${env:PYTHONPATH}",
+            },
+
+            "args": [
+                "--image-size", "512", 
+                "--seed", "1",
+                "--ckpt", "results/000-DiT-XL-2/checkpoints/0000001.pt",
+                "--num-sampling-steps", "20",
             ]
         },
 
@@ -100,8 +124,28 @@
                 "train.py",
                 "--model", "DiT-XL/2", 
                 "--data-path", "/harddisk/yzhu/imagenet-1k/val",
-                "--ckpt_every", "5000",
 
+            ]
+        },
+
+        {
+            "name": "dit_infer",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "sample.py",
+
+            "python": "/home/yzhu/anaconda3/envs/dojo/bin/python",
+            "console": "integratedTerminal",
+            // "module": "torch.distributed.run",
+            "justMyCode": false,
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0", // "0,1,2,3",
+                "PYTHONPATH": "${workspaceFolder}:${env:PYTHONPATH}",
+            },
+
+            "args": [
+                "--image-size", "512", 
+                "--seed", "1",
             ]
         },
 

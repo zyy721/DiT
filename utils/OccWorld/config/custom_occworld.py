@@ -18,7 +18,7 @@ return_len_ = end_frame
 return_len_train = end_frame
 num_frames_ = 15
 # load_from = 'out/occworld/epoch_125.pth'
-load_from = 'examples/world_model/demo_model/epoch_1.pth' #recommend selecting the best vqvae model
+load_from = '/harddisk/yzhu/OccWorld/out/vae/epoch_195.pth' #recommend selecting the best vqvae model
 port = 25095
 revise_ckpt = 3
 eval_every_epochs = 1
@@ -83,6 +83,8 @@ train_loader = dict(
     
 val_loader = dict(
     batch_size = 1,
+    # batch_size = 2,
+
     shuffle = False,
     num_workers = 1,
 )
@@ -247,4 +249,5 @@ model = dict(
 shapes = [[200, 200], [100, 100], [50, 50], [25, 25]]
 
 unique_label = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
-label_mapping = "./config/label_mapping/nuscenes-occ.yaml"
+# label_mapping = "./config/label_mapping/nuscenes-occ.yaml"
+label_mapping = "utils/OccWorld/config/label_mapping/nuscenes-occ.yaml"
